@@ -1,28 +1,36 @@
 ---
-
-- name: create system group
-  group:
+- name: Ensure system group
+  ansible.builtin.group:
     name: "{{ gpg_group }}"
-    system: "{{ 'yes' if gpg_system_group else 'no' }}"
+    system: "{{ true if gpg_system_group else false }}"
     state: "present"
 
-- name: create system user
-  user:
+- name: Ensure system user
+  ansible.builtin.user:
     name: "{{ gpg_user }}"
     group: "{{ gpg_group }}"
+    append: true
     home: "{{ gpg_home }}"
-    system: "{{ 'yes' if gpg_system_user else 'no' }}"
+    system: "{{ true if gpg_system_user else false }}"
 
-- name: ensure gnupg2 pkgs
-  apt:
-    items:
+- name: Ensure gnupg2 pkgs
+  ansible.builtin.apt:
+    name:
       - pinentry-tty
       - gnupg2
-    update_cache: yes
+    update_cache: true
 
-- name: ensure .gnupg cfgs
-  template:
-    src:  "gnupg/{{ item }}.j2"
+- name: Ensure gnupg directory
+  ansible.builtin.file:
+    path: "{{ gpg_home }}/.gnupg"
+    state: directory
+    mode: "0700"
+    owner: "{{ gpg_user }}"
+    group: "{{ gpg_group }}"
+
+- name: Ensure .gnupg cfgs
+  ansible.builtin.template:
+    src: "gnupg/{{ item }}.j2"
     dest: "{{ gpg_home }}/.gnupg/{{ item }}"
     owner: "{{ gpg_user }}"
     group: "{{ gpg_group }}"
@@ -32,81 +40,91 @@
     - gpg.conf
   notify: reload gpg-agent
 
-- name: check public key
-  become: yes
+- name: Check public key
+  become: true
   become_user: "{{ gpg_user }}"
-  command: gpg2 --list-public-keys
-  changed_when: False
+  ansible.builtin.command:
+    cmd: gpg2 --list-public-keys
+  changed_when: false
   register: pubkey_check
 
-- name: check signing key
-  become: yes
+- name: Check signing key
+  become: true
   become_user: "{{ gpg_user }}"
-  command: gpg2 --list-secret-keys
-  changed_when: False
+  ansible.builtin.command:
+    cmd: gpg2 --list-secret-keys
+  changed_when: false
   register: signkey_check
 
-- name: check ownertrust
-  become: yes
+- name: Check ownertrust
+  become: true
   become_user: "{{ gpg_user }}"
-  command: gpg2 --export-ownertrust
-  changed_when: False
+  ansible.builtin.command:
+    cmd: gpg2 --export-ownertrust
+  changed_when: false
   register: ownertrust_check
 
-- name: ensure gpg2 dicrectory and keys
+- name: Ensure gpg2 dicrectory and keys
+  when: (not signkey_check.stdout ) and (not pubkey_check.stdout) and (":6:" not in ownertrust_check.stdout)
   block:
-    - name: ensure gnupg directory
-      file:
+    - name: Ensure gnupg directory
+      ansible.builtin.file:
         path: "{{ tmp_dir }}"
         state: "directory"
         owner: "{{ gpg_user }}"
         group: "{{ gpg_group }}"
         mode: "0700"
 
-    - name: copy pub key
-      copy:
+    - name: Ensure pub key
+      ansible.builtin.copy:
         content: "{{ gpg_pubkey }}"
         dest: "{{ tmp_dir }}/public.key"
         owner: "{{ gpg_user }}"
         group: "{{ gpg_group }}"
         mode: "0600"
 
-    - name: copy ultimate trust
-      copy:
+    - name: Ensure ultimate trust
+      ansible.builtin.copy:
         content: "{{ gpg_ownertrust }}"
         dest: "{{ tmp_dir }}/ultimate.txt"
         owner: "{{ gpg_user }}"
         group: "{{ gpg_group }}"
         mode: "0600"
 
-    - name: copy sign key
-      copy:
+    - name: Ensure sign key
+      ansible.builtin.copy:
         content: "{{ gpg_signkey }}"
         dest: "{{ tmp_dir }}/signing.key"
         owner: "{{ gpg_user }}"
         group: "{{ gpg_group }}"
         mode: "0600"
-  when: (not signkey_check.stdout ) and (not pubkey_check.stdout) and (":6:" not in ownertrust_check.stdout)
+      no_log: true
 
-- name: ensure public key
-  become: yes
+- name: Ensure public key
+  become: true
   become_user: "{{ gpg_user }}"
-  command: gpg2 --import {{ tmp_dir }}/public.key
+  ansible.builtin.command:
+    cmd: gpg2 --import {{ tmp_dir }}/public.key
+  changed_when: true
   when: gpg_email not in pubkey_check.stdout
 
-- name: ensure signing key
-  become: yes
+- name: Ensure signing key
+  become: true
   become_user: "{{ gpg_user }}"
-  command: gpg2 --passphrase {{ gpg_sign_passwd }} --import {{ tmp_dir }}/signing.key
+  ansible.builtin.command:
+    cmd: gpg2 --passphrase {{ gpg_sign_passwd }} --import {{ tmp_dir }}/signing.key
+  changed_when: true
   when: gpg_email not in signkey_check.stdout
 
-- name: ensure ownertrust
-  become: yes
+- name: Ensure ownertrust
+  become: true
   become_user: "{{ gpg_user }}"
-  command: gpg2 --import-ownertrust {{ tmp_dir }}/ultimate.txt
+  ansible.builtin.command:
+    cmd: gpg2 --import-ownertrust {{ tmp_dir }}/ultimate.txt
+  changed_when: true
   when: (":6:" not in ownertrust_check.stdout)
 
-- name: clean up tmp directory and keys
-  file:
+- name: Clean up tmp directory and keys
+  ansible.builtin.file:
     state: absent
     path: "{{ tmp_dir }}/"
